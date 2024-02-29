@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: Apache-2.0
+#![allow(unused_attributes)]
+
+use solana_program::{
+    account_info::{next_account_info, AccountInfo},
+    entrypoint,
+    entrypoint::ProgramResult,
+    msg,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    _instruction_data: &[u8],
+) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+
+    // Parse accounts
+    let voting_account = next_account_info(accounts_iter)?;
+    let proposals_account = next_account_info(accounts_iter)?;
+
+    // Read and deserialize proposals from storage
+    let mut proposals = Proposals::unpack(&proposals_account.data.borrow())?;
+
+    // Execute voting instructions based on the instruction data
+    match _instruction_data[0] {
+        // Add proposal
+        0 => {
+            let name = String::from_utf8(_instruction_data[1..].to_vec()).unwrap();
+            proposals.add_proposal(name)?;
+        }
+        // Vote for proposal
+        1 => {
+            let proposal_index = _instruction_data[1] as usize;
+            let voter_pubkey = *accounts_iter.next().unwrap().key;
+            proposals.vote(proposal_index, voter_pubkey)?;
+        }
+        _ => return Err(ProgramError::InvalidInstructionData),
+    }
+
+    // Serialize and save updated proposals to storage
+    proposals.pack(&mut proposals_account.data.borrow_mut())?;
+
+    Ok(())
+}
+
+// Define the Proposals struct
+#[derive(Debug)]
+struct Proposals {
+    list: Vec<Proposal>,
+}
+
+impl Proposals {
+    // Add a new proposal
+    fn add_proposal(&mut self, name: String) -> ProgramResult {
+        self.list.push(Proposal {
+            name,
+            votes: 0,
+            voters: Vec::new(),
+        });
+        Ok(())
+    }
+
+    // Vote for a proposal
+    fn vote(&mut self, index: usize, voter_pubkey: Pubkey) -> ProgramResult {
+        if let Some(proposal) = self.list.get_mut(index) {
+            if !proposal.voters.contains(&voter_pubkey) {
+                proposal.votes += 1;
+                proposal.voters.push(voter_pubkey);
+                Ok(())
+            } else {
+                Err(ProgramError::InvalidAccountData)
+            }
+        } else {
+            Err(ProgramError::InvalidIndex)
+        }
+    }
+}
+
+// Define the Proposal struct
+#[derive(Debug)]
+struct Proposal {
+    name: String,
+    votes: u32,
+    voters: Vec<Pubkey>,
+}
+
+// Implement serialization and deserialization for Proposals struct
+impl Proposals {
+    fn unpack(input: &[u8]) -> Result<Self, ProgramError> {
+        let list: Vec<Proposal> = bincode::deserialize(input).map_err(|_| ProgramError::InvalidAccountData)?;
+        Ok(Proposals { list })
+    }
+
+    fn pack(&self, output: &mut [u8]) -> Result<(), ProgramError> {
+        bincode::serialize_into(output, &self.list).map_err(|_| ProgramError::InvalidAccountData)?;
+        Ok(())
+    }
+}
